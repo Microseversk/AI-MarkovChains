@@ -12,7 +12,11 @@ from typing import DefaultDict, Iterable, List, Sequence, Tuple
 
 START_TOKEN = "<START>"
 END_TOKEN = "<END>"
-TOKEN_PATTERN = re.compile(r"[A-Za-z\u0410-\u044f\u0401\u04510-9']+|[.,!?;:()\u00ab\u00bb\"-]", re.UNICODE)
+LINEBREAK_TOKEN = "<LINEBREAK>"
+TOKEN_PATTERN = re.compile(
+    rf"{re.escape(LINEBREAK_TOKEN)}|[A-Za-z\u0410-\u044f\u0401\u04510-9']+|[.,!?;:()\u00ab\u00bb\"-]",
+    re.UNICODE,
+)
 NO_SPACE_BEFORE = set(".,!?;:)]}\"\u00bb>")
 NO_SPACE_AFTER = set("([{\u00ab<")
 SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?])\s+")
@@ -40,6 +44,7 @@ def load_jokes(
     fallback_encoding: str | None = None,
     errors: str = "strict",
     lowercase: bool = False,
+    preserve_linebreaks: bool = False,
 ) -> List[str]:
     """Read jokes separated by blank lines, return cleaned strings."""
     jokes: List[str] = []
@@ -49,20 +54,21 @@ def load_jokes(
         line = raw_line.strip()
         if not line:
             if chunk:
-                jokes.append(process_chunk(chunk, lowercase))
+                jokes.append(process_chunk(chunk, lowercase, preserve_linebreaks))
                 chunk = []
             continue
         chunk.append(line)
 
     if chunk:
-        jokes.append(process_chunk(chunk, lowercase))
+        jokes.append(process_chunk(chunk, lowercase, preserve_linebreaks))
 
     return jokes
 
 
-def process_chunk(lines: List[str], lowercase: bool) -> str:
+def process_chunk(lines: List[str], lowercase: bool, preserve_linebreaks: bool) -> str:
     """Join and normalize a single joke chunk."""
-    text = " ".join(lines)
+    separator = "\n" if preserve_linebreaks else " "
+    text = separator.join(lines)
     return text.lower() if lowercase else text
 
 
@@ -153,28 +159,41 @@ def untokenize(tokens: Sequence[str]) -> str:
         return ""
 
     pieces: List[str] = []
+    at_line_start = True
+
     for token in tokens:
-        if not pieces:
-            pieces.append(token)
+        if token == LINEBREAK_TOKEN:
+            pieces.append("\n")
+            at_line_start = True
             continue
 
-        if token in NO_SPACE_BEFORE:
+        if not pieces or at_line_start:
+            pieces.append(token)
+        elif token in NO_SPACE_BEFORE:
             pieces[-1] += token
-        elif pieces[-1][-1] in NO_SPACE_AFTER:
+        elif pieces[-1].endswith("\n") or pieces[-1][-1] in NO_SPACE_AFTER:
             pieces[-1] += token
         else:
             pieces.append(f" {token}")
 
+        at_line_start = False
+
     return "".join(pieces)
 
 
-def build_sequences(jokes: Sequence[str], min_tokens: int, sentence_mode: bool) -> List[List[str]]:
+def build_sequences(
+    jokes: Sequence[str],
+    min_tokens: int,
+    sentence_mode: bool,
+    preserve_linebreaks: bool,
+) -> List[List[str]]:
     """Convert jokes to token sequences, optionally splitting by sentences."""
     sequences: List[List[str]] = []
     for joke in jokes:
         fragments = split_into_sentences(joke) if sentence_mode else [joke]
         for fragment in fragments:
-            tokens = tokenize(fragment)
+            text = fragment.replace("\n", f" {LINEBREAK_TOKEN} ") if preserve_linebreaks else fragment
+            tokens = tokenize(text)
             if len(tokens) >= min_tokens:
                 sequences.append(tokens)
     return sequences
@@ -205,6 +224,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--seed", type=int, help="Random seed for reproducibility.")
     parser.add_argument("--lowercase", action="store_true", help="Lowercase the dataset before training.")
+    parser.add_argument(
+        "--preserve-linebreaks",
+        action="store_true",
+        help="Treat line breaks as tokens to keep dialogue-style formatting.",
+    )
     parser.set_defaults(carry_context=True)
     return parser.parse_args()
 
@@ -219,8 +243,9 @@ def main() -> None:
         fallback_encoding=args.fallback_encoding,
         errors=args.errors,
         lowercase=args.lowercase,
+        preserve_linebreaks=args.preserve_linebreaks,
     )
-    sequences = build_sequences(jokes, args.min_tokens, args.split_sentences)
+    sequences = build_sequences(jokes, args.min_tokens, args.split_sentences, args.preserve_linebreaks)
     if not sequences:
         raise SystemExit("Dataset is empty after filtering; adjust --min-tokens or check the input file.")
     chain = build_chain(sequences, args.order)
