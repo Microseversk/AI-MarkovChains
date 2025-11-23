@@ -8,7 +8,7 @@ import random
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import DefaultDict, Iterable, List, Sequence, Tuple
+from typing import DefaultDict, Iterable, List, Sequence, Set, Tuple
 
 START_TOKEN = "<START>"
 END_TOKEN = "<END>"
@@ -124,7 +124,7 @@ def generate_joke(
     rng: random.Random,
     sentences_per_joke: int,
     carry_context: bool,
-) -> str:
+) -> Tuple[str, List[str]]:
     """Sample a multi-sentence joke from transition counts."""
     state = tuple([START_TOKEN] * order)
     generated: List[str] = []
@@ -150,7 +150,7 @@ def generate_joke(
         tokens_used += 1
         state = (*state[1:], nxt) if order > 1 else (nxt,)
 
-    return untokenize(generated)
+    return untokenize(generated), generated
 
 
 def untokenize(tokens: Sequence[str]) -> str:
@@ -197,6 +197,29 @@ def build_sequences(
             if len(tokens) >= min_tokens:
                 sequences.append(tokens)
     return sequences
+
+
+def collect_ngrams(sequences: Sequence[Sequence[str]], order: int) -> Set[Tuple[str, ...]]:
+    """Build a set of n-grams present in the training data."""
+    known: Set[Tuple[str, ...]] = set()
+    for seq in sequences:
+        if len(seq) < order:
+            continue
+        for idx in range(len(seq) - order + 1):
+            known.add(tuple(seq[idx : idx + order]))
+    return known
+
+
+def uniqueness_score(tokens: Sequence[str], known_ngrams: Set[Tuple[str, ...]], order: int) -> float:
+    """Return novelty percentage based on unseen n-grams."""
+    if not tokens:
+        return 0.0
+    if order < 1 or len(tokens) < order:
+        return 100.0
+
+    total = len(tokens) - order + 1
+    novel = sum(1 for idx in range(total) if tuple(tokens[idx : idx + order]) not in known_ngrams)
+    return (novel / total) * 100
 
 
 def parse_args() -> argparse.Namespace:
@@ -249,9 +272,10 @@ def main() -> None:
     if not sequences:
         raise SystemExit("Dataset is empty after filtering; adjust --min-tokens or check the input file.")
     chain = build_chain(sequences, args.order)
+    known_ngrams = collect_ngrams(sequences, args.order)
 
     for idx in range(args.count):
-        joke = generate_joke(
+        joke, tokens = generate_joke(
             chain,
             args.order,
             args.max_length,
@@ -259,7 +283,8 @@ def main() -> None:
             args.sentences_per_joke,
             args.carry_context,
         )
-        print(f"{idx + 1:02d}: {joke}")
+        uniqueness = uniqueness_score(tokens, known_ngrams, args.order)
+        print(f"{idx + 1:02d}: {joke} (uniqueness: {uniqueness:.1f}%)")
 
 
 if __name__ == "__main__":
