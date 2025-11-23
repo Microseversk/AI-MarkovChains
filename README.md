@@ -114,3 +114,6 @@ python markov_jokes.py --dataset jokes_with_dialogs.txt --preserve-linebreaks --
 ### Примеры запуска для min/max uniqueness
 - Минимум (ожидаемо близко к 0%, так как все n-граммы встречались в корпусе): `python markov_jokes.py --order 3 --count 1`
 - Максимум (100%, потому что длина шутки меньше `order`): `python markov_jokes.py --order 5 --max-length 2 --sentences-per-joke 1 --count 1`
+## CLI helper
+- Запуск с параметрами через `cli.py`: `python cli.py generate --dataset full_jokes.txt --count 3 --order 3`.
+- Интерктивный режим с вопросами по параметрам: `python cli.py interactive`.
